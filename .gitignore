@@ -1,0 +1,7 @@
+node_modules
+.env
+npm-debug.log*
+src/uploads/provider-photos/*
+src/uploads/id-documents/*
+!src/uploads/provider-photos/.gitkeep
+!src/uploads/id-documents/.gitkeep
