@@ -16,37 +16,13 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
+# 🔒 ფიქსირებული, 100% მუშა მოდელი
+MODEL_NAME = "gemini-1.0-pro"
+
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-
-# --- MODEL SELECTOR (IMPROVED) ---
-def get_best_model():
-    try:
-        models = list(genai.list_models())
-
-        # პრიორიტეტი
-        priority = [
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
-            "gemini-1.0-pro"
-        ]
-
-        for p in priority:
-            for m in models:
-                if p in m.name and "generateContent" in m.supported_generation_methods:
-                    logging.info(f"✅ Selected model: {m.name}")
-                    return genai.GenerativeModel(m.name)
-
-    except Exception as e:
-        logging.error(f"Model detection failed: {e}")
-
-    logging.info("⚠️ Fallback → gemini-1.0-pro")
-    return genai.GenerativeModel("gemini-1.0-pro")
-
-
-model = get_best_model()
 
 # --- WEB SERVER ---
 async def handle(request):
@@ -115,7 +91,7 @@ async def process_language(callback: types.CallbackQuery, state: FSMContext):
         builder.row(types.InlineKeyboardButton(text=g, callback_data=f"genre_{g}"))
 
     await callback.message.edit_text("🎸 აირჩიე ჟანრი:")
-    await callback.message.answer("👇", reply_markup=builder.as_markup())
+    await callback.message.answer("👇 აირჩიე:", reply_markup=builder.as_markup())
 
     await state.set_state(SongGenerator.genre)
 
@@ -125,7 +101,7 @@ async def process_genre(callback: types.CallbackQuery, state: FSMContext):
     genre = callback.data.replace("genre_", "")
     await state.update_data(genre=genre)
 
-    await callback.message.answer("📝 დაწერე თემა:")
+    await callback.message.answer("📝 დაწერე სიმღერის თემა:")
     await state.set_state(SongGenerator.topic)
 
 # --- TOPIC ---
@@ -145,38 +121,38 @@ async def process_topic(message: types.Message, state: FSMContext):
 
 # --- GENERATION ---
 async def generate_song(data):
-    global model
-
     prompt = f"""
+ROLE: {LANGUAGE_PROMPTS[data['lang']]}
+
 Create a viral hit song.
 
 Topic: {data['topic']}
 Genre: {data['genre']}
 Vocal: {data['gender']}
 
-- Viral chorus
-- Emotional
+Requirements:
+- Viral chorus (TikTok ready)
+- Emotional impact
+- Perfect rhyme
 - Modern structure
 
 OUTPUT:
-STYLE PROMPT
+
+🎯 STYLE PROMPT
 ---
-LYRICS
+📝 LYRICS
 ---
-THUMBNAIL PROMPT
+🖼 THUMBNAIL PROMPT
 """
 
     for attempt in range(3):
         try:
+            model = genai.GenerativeModel(MODEL_NAME)
             response = model.generate_content(prompt)
             return response.text
 
         except Exception as e:
-            logging.error(f"Attempt {attempt+1}: {e}")
-
-            # fallback switch
-            model = genai.GenerativeModel("gemini-1.0-pro")
-
+            logging.error(f"Attempt {attempt+1} failed: {e}")
             await asyncio.sleep(1)
 
     return "❌ გენერაცია ვერ მოხერხდა."
