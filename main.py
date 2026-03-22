@@ -21,23 +21,30 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- SMART MODEL SELECTOR ---
+# --- MODEL SELECTOR (IMPROVED) ---
 def get_best_model():
     try:
         models = list(genai.list_models())
-        # ვეძებთ სპეციალურად flash ან pro ვერსიებს
-        for m in models:
-            if "generateContent" in m.supported_generation_methods:
-                if "flash" in m.name.lower() or "pro" in m.name.lower():
-                    logging.info(f"✅ ავტომატურად აირჩა მოდელი: {m.name}")
-                    return genai.GenerativeModel(m.name)
-                    
-    except Exception as e:
-        logging.error(f"❌ Model detection failed: {e}")
 
-    # Fallback ვარიანტი (თუ რამე აირია სიაში)
-    logging.info("⚠️ ვიყენებთ სტანდარტულ gemini-pro-ს")
-    return genai.GenerativeModel("gemini-pro")
+        # პრიორიტეტი
+        priority = [
+            "gemini-1.5-pro",
+            "gemini-1.5-flash",
+            "gemini-1.0-pro"
+        ]
+
+        for p in priority:
+            for m in models:
+                if p in m.name and "generateContent" in m.supported_generation_methods:
+                    logging.info(f"✅ Selected model: {m.name}")
+                    return genai.GenerativeModel(m.name)
+
+    except Exception as e:
+        logging.error(f"Model detection failed: {e}")
+
+    logging.info("⚠️ Fallback → gemini-1.0-pro")
+    return genai.GenerativeModel("gemini-1.0-pro")
+
 
 model = get_best_model()
 
@@ -76,4 +83,126 @@ LANGUAGE_PROMPTS = {
 }
 
 GENRES = [
-    "Cinematic Epic", "Pop
+    "Cinematic Epic", "Pop", "Hip Hop", "Rock",
+    "Deep House", "Techno", "Georgian Folk",
+    "Country Pop", "R&B"
+]
+
+# --- START ---
+@dp.message(Command("start"))
+async def start_cmd(message: types.Message, state: FSMContext):
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="🇬🇪 ქართული", callback_data="lang_ka"),
+        types.InlineKeyboardButton(text="🇺🇸 English", callback_data="lang_en")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru"),
+        types.InlineKeyboardButton(text="🇪🇸 Español", callback_data="lang_es")
+    )
+
+    await message.answer("🎼 აირჩიე ენა:", reply_markup=builder.as_markup())
+    await state.set_state(SongGenerator.language)
+
+# --- LANGUAGE ---
+@dp.callback_query(F.data.startswith("lang_"))
+async def process_language(callback: types.CallbackQuery, state: FSMContext):
+    lang = callback.data.split("_")[1]
+    await state.update_data(lang=lang)
+
+    builder = InlineKeyboardBuilder()
+    for g in GENRES:
+        builder.row(types.InlineKeyboardButton(text=g, callback_data=f"genre_{g}"))
+
+    await callback.message.edit_text("🎸 აირჩიე ჟანრი:")
+    await callback.message.answer("👇", reply_markup=builder.as_markup())
+
+    await state.set_state(SongGenerator.genre)
+
+# --- GENRE ---
+@dp.callback_query(F.data.startswith("genre_"))
+async def process_genre(callback: types.CallbackQuery, state: FSMContext):
+    genre = callback.data.replace("genre_", "")
+    await state.update_data(genre=genre)
+
+    await callback.message.answer("📝 დაწერე თემა:")
+    await state.set_state(SongGenerator.topic)
+
+# --- TOPIC ---
+@dp.message(SongGenerator.topic)
+async def process_topic(message: types.Message, state: FSMContext):
+    await state.update_data(topic=message.text)
+
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="👨 Male", callback_data="gen_Male"),
+        types.InlineKeyboardButton(text="👩 Female", callback_data="gen_Female"),
+        types.InlineKeyboardButton(text="👥 Duo", callback_data="gen_Duo")
+    )
+
+    await message.answer("🎤 აირჩიე ვოკალი:", reply_markup=builder.as_markup())
+    await state.set_state(SongGenerator.gender)
+
+# --- GENERATION ---
+async def generate_song(data):
+    global model
+
+    prompt = f"""
+Create a viral hit song.
+
+Topic: {data['topic']}
+Genre: {data['genre']}
+Vocal: {data['gender']}
+
+- Viral chorus
+- Emotional
+- Modern structure
+
+OUTPUT:
+STYLE PROMPT
+---
+LYRICS
+---
+THUMBNAIL PROMPT
+"""
+
+    for attempt in range(3):
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+
+        except Exception as e:
+            logging.error(f"Attempt {attempt+1}: {e}")
+
+            # fallback switch
+            model = genai.GenerativeModel("gemini-1.0-pro")
+
+            await asyncio.sleep(1)
+
+    return "❌ გენერაცია ვერ მოხერხდა."
+
+# --- FINAL ---
+@dp.callback_query(F.data.startswith("gen_"))
+async def generate_final(callback: types.CallbackQuery, state: FSMContext):
+    gender = callback.data.split("_")[1]
+    data = await state.get_data()
+    data["gender"] = gender
+
+    await callback.message.edit_text("⏳ ვქმნი ჰიტს...")
+
+    content = await generate_song(data)
+
+    for part in split_message(content):
+        await callback.message.answer(part)
+
+    await state.clear()
+
+# --- MAIN ---
+async def main():
+    await asyncio.gather(
+        start_web_server(),
+        dp.start_polling(bot)
+    )
+
+if __name__ == "__main__":
+    asyncio.run(main())
