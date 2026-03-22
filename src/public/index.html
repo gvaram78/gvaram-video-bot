@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STYLIO MVP Tester</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; }
+    section { border: 1px solid #ddd; padding: 16px; margin-bottom: 14px; border-radius: 8px; }
+    input, button, select, textarea { margin: 4px 0; padding: 8px; width: 100%; }
+    pre { background: #f6f6f6; padding: 10px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>STYLIO API Tester</h1>
+
+  <section>
+    <h2>Auth</h2>
+    <input id="name" placeholder="name" value="Test Client" />
+    <input id="email" placeholder="email" value="client@example.com" />
+    <input id="password" placeholder="password" value="123456" type="password" />
+    <select id="role">
+      <option value="client">client</option>
+      <option value="provider">provider</option>
+    </select>
+    <button onclick="register()">Register</button>
+    <button onclick="login()">Login</button>
+    <p>Token: <span id="token"></span></p>
+  </section>
+
+  <section>
+    <h2>Browse Providers</h2>
+    <select id="cityFilter">
+      <option value="">All Cities</option>
+      <option>Tbilisi</option>
+      <option>Rustavi</option>
+      <option>Batumi</option>
+      <option>Kutaisi</option>
+    </select>
+    <input id="serviceType" placeholder="service category (e.g. Hair)" />
+    <button onclick="getProviders()">Load Providers</button>
+  </section>
+
+  <section>
+    <h2>Output</h2>
+    <pre id="output"></pre>
+  </section>
+
+<script>
+const out = document.getElementById('output');
+let token = localStorage.getItem('stylioToken') || '';
+document.getElementById('token').textContent = token ? token.slice(0, 20) + '...' : 'none';
+
+async function api(path, method='GET', body) {
+  const res = await fetch('/api' + path, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const data = await res.json();
+  out.textContent = JSON.stringify(data, null, 2);
+  return data;
+}
+
+async function register() {
+  const data = await api('/auth/register', 'POST', {
+    name: name.value,
+    email: email.value,
+    password: password.value,
+    role: role.value,
+    city: 'Tbilisi'
+  });
+  if (data.token) {
+    token = data.token;
+    localStorage.setItem('stylioToken', token);
+    document.getElementById('token').textContent = token.slice(0, 20) + '...';
+  }
+}
+
+async function login() {
+  const data = await api('/auth/login', 'POST', {
+    email: email.value,
+    password: password.value
+  });
+  if (data.token) {
+    token = data.token;
+    localStorage.setItem('stylioToken', token);
+    document.getElementById('token').textContent = token.slice(0, 20) + '...';
+  }
+}
+
+async function getProviders() {
+  const city = cityFilter.value;
+  const service = serviceType.value;
+  const params = new URLSearchParams();
+  if (city) params.append('city', city);
+  if (service) params.append('serviceType', service);
+  await api('/providers?' + params.toString());
+}
+</script>
+</body>
+</html>
