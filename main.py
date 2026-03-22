@@ -10,134 +10,189 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import web
 
-# --- კონფიგურაცია ---
-API_TOKEN = '8542244342:AAG6xFz93qGqlxw0qjkIug0dEhgm1wmbp_I'
-GOOGLE_API_KEY = 'AIzaSyCDn8k5ESIR-BvPZZ-47bw--uZoJYkK5Xw'
+# --- CONFIG ---
+API_TOKEN = os.getenv("BOT_TOKEN")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# Gemini-ს გამართვა (ყველაზე სტაბილური მოდელით)
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-pro')
+model = genai.GenerativeModel('gemini-1.5-pro')
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- ვებ-სერვერი Render-ის "გასაღვიძებლად" ---
+# --- WEB SERVER ---
 async def handle(request):
-    return web.Response(text="Suno Music Bot is Live and Ready!")
+    return web.Response(text="Bot is running!")
 
 async def start_web_server():
     app = web.Application()
     app.router.add_get('/', handle)
+    app.router.add_get('/health', handle)
+
     runner = web.AppRunner(app)
     await runner.setup()
+
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    logging.info(f"Web server started on port {port}")
 
-# --- ბოტის ფაზები (States) ---
+# --- STATES ---
 class SongGenerator(StatesGroup):
     language = State()
     genre = State()
     topic = State()
     gender = State()
 
-# პერსონების ინსტრუქციები ენების მიხედვით
+# --- HELPERS ---
+def split_message(text, max_length=4000):
+    return [text[i:i+max_length] for i in range(0, len(text), max_length)]
+
 LANGUAGE_PROMPTS = {
-    "ka": "Expert Georgian Poet (Galaktion style). Use deep metaphors, perfect rhymes, and rhythmic flow.",
-    "en": "Grammy-winning US Songwriter. Focus on catchy hooks, perfect meter, and clever wordplay.",
-    "ru": "Master Russian Lyricist. Use 'Точные рифмы', deep emotional resonance, and classic structure.",
-    "es": "Elite Spanish Composer. Passionate metaphors, 'Rimas consonantes', and rhythmic Latin style."
+    "ka": "Elite Georgian Poet. Deep metaphors, perfect rhythm, emotional depth.",
+    "en": "Top Billboard Songwriter. Viral hooks, modern structure, catchy phrasing.",
+    "ru": "Master Russian Lyricist. Precise rhymes, strong emotional storytelling.",
+    "es": "Latin Hitmaker. Passion, rhythm, memorable choruses."
 }
 
-# --- ბოტის ფუნქციონალი ---
+GENRES = [
+    "Cinematic Epic", "Pop", "Hip Hop", "Rock",
+    "Deep House", "Techno", "Georgian Folk",
+    "Country Pop", "R&B"
+]
 
+# --- START ---
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🇬🇪 ქართული", callback_data="lang_ka"),
-                types.InlineKeyboardButton(text="🇺🇸 English", callback_data="lang_en"))
-    builder.row(types.InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru"),
-                types.InlineKeyboardButton(text="🇪🇸 Español", callback_data="lang_es"))
-    
+    builder.row(
+        types.InlineKeyboardButton(text="🇬🇪 ქართული", callback_data="lang_ka"),
+        types.InlineKeyboardButton(text="🇺🇸 English", callback_data="lang_en")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru"),
+        types.InlineKeyboardButton(text="🇪🇸 Español", callback_data="lang_es")
+    )
+
     await message.answer(
-        "🎼 **კეთილი იყოს თქვენი მობრძანება პროფესიონალურ მუსიკალურ სტუდიაში!**\n\n"
-        "მე შევქმნი უზუსტეს ტექსტებს Suno AI-სთვის.\n"
-        "პირველ რიგში, **აირჩიეთ სიმღერის ენა:**", 
+        "🎼 აირჩიე სიმღერის ენა:",
         reply_markup=builder.as_markup()
     )
     await state.set_state(SongGenerator.language)
 
+# --- LANGUAGE ---
 @dp.callback_query(F.data.startswith("lang_"))
 async def process_language(callback: types.CallbackQuery, state: FSMContext):
-    lang_code = callback.data.split("_")[1]
-    await state.update_data(lang=lang_code)
-    await callback.message.edit_text("🎸 რა **ჟანრში** გსურთ სიმღერა?\n(მაგ: Cinematic Epic, Deep House, Georgian Polyphony, Heavy Metal):")
+    lang = callback.data.split("_")[1]
+    await state.update_data(lang=lang)
+
+    builder = InlineKeyboardBuilder()
+    for g in GENRES:
+        builder.row(types.InlineKeyboardButton(text=g, callback_data=f"genre_{g}"))
+
+    await callback.message.edit_text("🎸 აირჩიე ჟანრი:")
+    await callback.message.answer("👇 აირჩიე:", reply_markup=builder.as_markup())
+
     await state.set_state(SongGenerator.genre)
 
-@dp.message(SongGenerator.genre)
-async def process_genre(message: types.Message, state: FSMContext):
-    await state.update_data(genre=message.text)
-    await message.answer("📝 რა არის **სიმღერის თემა** ან მთავარი ისტორია?")
+# --- GENRE ---
+@dp.callback_query(F.data.startswith("genre_"))
+async def process_genre(callback: types.CallbackQuery, state: FSMContext):
+    genre = callback.data.replace("genre_", "")
+    await state.update_data(genre=genre)
+
+    await callback.message.answer("📝 დაწერე სიმღერის თემა:")
     await state.set_state(SongGenerator.topic)
 
+# --- TOPIC ---
 @dp.message(SongGenerator.topic)
 async def process_topic(message: types.Message, state: FSMContext):
     await state.update_data(topic=message.text)
-    
+
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="👨 კაცი (Male)", callback_data="gen_Male"),
-                types.InlineKeyboardButton(text="👩 ქალი (Female)", callback_data="gen_Female"))
-    builder.row(types.InlineKeyboardButton(text="👥 დუეტი (Duo)", callback_data="gen_Duo"))
-    
-    await message.answer("🎤 აირჩიეთ **ვოკალის ტიპი**:", reply_markup=builder.as_markup())
+    builder.row(
+        types.InlineKeyboardButton(text="👨 Male", callback_data="gen_Male"),
+        types.InlineKeyboardButton(text="👩 Female", callback_data="gen_Female"),
+        types.InlineKeyboardButton(text="👥 Duo", callback_data="gen_Duo")
+    )
+
+    await message.answer("🎤 აირჩიე ვოკალი:", reply_markup=builder.as_markup())
     await state.set_state(SongGenerator.gender)
 
+# --- GENERATION ---
+async def generate_song(data):
+    prompt = f"""
+ROLE: {LANGUAGE_PROMPTS[data['lang']]}
+
+TASK: Create a HIT SONG for Suno AI
+
+CONTEXT:
+- Topic: {data['topic']}
+- Genre: {data['genre']}
+- Vocal: {data['gender']}
+
+REQUIREMENTS:
+1. SUPER VIRAL CHORUS (TikTok ready, repeatable)
+2. Modern structure
+3. Strong emotional impact
+4. Perfect rhyme and rhythm
+5. Memorable phrases
+
+OUTPUT:
+
+🎯 STYLE PROMPT (English, detailed, BPM, instruments)
+---
+📝 LYRICS:
+[Intro]
+[Verse 1]
+[Pre-Chorus]
+[Chorus]
+[Verse 2]
+[Bridge]
+[Outro]
+---
+🖼 THUMBNAIL PROMPT (cinematic 16:9)
+"""
+
+    for _ in range(2):  # retry ერთხელ
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            logging.error(f"Retry error: {e}")
+            await asyncio.sleep(1)
+
+    return "❌ გენერაცია ვერ მოხერხდა."
+
+# --- FINAL ---
 @dp.callback_query(F.data.startswith("gen_"))
 async def generate_final(callback: types.CallbackQuery, state: FSMContext):
     gender = callback.data.split("_")[1]
-    user_data = await state.get_data()
-    lang = user_data['lang']
-    genre = user_data['genre']
-    topic = user_data['topic']
-    
-    await callback.message.edit_text("⏳ **ვქმნი პროფესიონალურ პაკეტს...**\nვიყენებ Gemini Pro-ს მაქსიმალური ხარისხისთვის.")
+    data = await state.get_data()
+    data["gender"] = gender
 
-    prompt = f"""
-    ROLE: {LANGUAGE_PROMPTS[lang]}
-    TASK: Write a full, top-tier song for Suno AI.
-    
-    CONTEXT:
-    - Topic: {topic}
-    - Genre/Style: {genre}
-    - Vocal: {gender}
-    - Language: {lang}
+    await callback.message.edit_text("⏳ ვქმნი ჰიტს...")
 
-    STRICT REQUIREMENTS:
-    1. STYLE PROMPT: Create a detailed 'Style of Music' prompt for Suno in English (BPM, instruments, mood).
-    2. LYRICS: Full structure [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Outro].
-    3. RHYME: Every verse must have a flawless, professional rhyme scheme.
-    4. YOUTUBE PROMPT: Provide 1 viral, cinematic 16:9 image prompt for a YouTube Thumbnail.
+    content = await generate_song(data)
 
-    OUTPUT FORMAT:
-    🎯 **SUNO STYLE PROMPT:** (English tags)
-    ---
-    📝 **LYRICS:** (The full song)
-    ---
-    🖼 **YOUTUBE THUMBNAIL PROMPT:** (16:9 prompt)
-    """
+    # split message
+    for part in split_message(content):
+        await callback.message.answer(part)
 
-    try:
-        response = model.generate_content(prompt)
-        content = response.text
-        await callback.message.answer(f"✅ **თქვენი შედევრი მზად არის!**\n\n{content}")
-    except Exception as e:
-        await callback.message.answer(f"❌ შეცდომა გენერაციისას: {str(e)}")
-    
+    # regenerate button
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="🔄 თავიდან გენერაცია", callback_data="regen"))
+
+    await callback.message.answer("👇", reply_markup=builder.as_markup())
+
     await state.clear()
 
-# --- გაშვება ---
+# --- REGENERATE ---
+@dp.callback_query(F.data == "regen")
+async def regenerate(callback: types.CallbackQuery, state: FSMContext):
+    await start_cmd(callback.message, state)
+
+# --- MAIN ---
 async def main():
     await asyncio.gather(
         start_web_server(),
